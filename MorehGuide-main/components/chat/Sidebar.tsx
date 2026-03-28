@@ -1,0 +1,325 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { FiSettings, FiPlus, FiMessageSquare, FiTrash2 } from "react-icons/fi";
+import { FaCloudUploadAlt } from "react-icons/fa";
+
+interface Chat {
+  _id: string;
+  chatId: string;
+  title: string;
+}
+
+interface SidebarProps {
+  userRole: string | null;
+  currentChatId: string | null;
+  onChatSelect: (chatId: string | null) => void;
+  refreshTrigger?: number;
+  isGuest?: boolean;
+}
+
+export default function Sidebar({
+  userRole,
+  currentChatId,
+  onChatSelect,
+  refreshTrigger,
+  isGuest = false,
+}: SidebarProps) {
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<any>(null);
+
+  // Simple admin check: email match OR isAdmin flag
+  const isSystemAdmin =
+    user && (user.email === "admin@admin.com" || user.isAdmin === true);
+
+  // Fetch chats from API
+  useEffect(() => {
+    const loadChats = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const userData = localStorage.getItem("user");
+        const activeRole = localStorage.getItem("activeRole");
+
+        if (userData) {
+          const parsedUser = JSON.parse(userData);
+          // Merge activeRole from localStorage if it exists
+          if (activeRole) {
+            parsedUser.activeRole = activeRole;
+          }
+          console.log("👤 [SIDEBAR]: User with activeRole:", parsedUser);
+          setUser(parsedUser);
+        }
+
+        if (!token) {
+          setIsLoading(false);
+          return;
+        }
+
+        const res = await fetch("/api/chats", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          console.log("Loaded chats:", data.chats);
+          setChats(data.chats || []);
+        }
+      } catch (error) {
+        console.error("Failed to load chats:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadChats();
+  }, [refreshTrigger]);
+
+  // Listen for auth state changes (profile picture updates on login)
+  useEffect(() => {
+    const handleAuthStateChanged = () => {
+      const userData = localStorage.getItem("user");
+      const activeRole = localStorage.getItem("activeRole");
+      if (userData) {
+        const parsedUser = JSON.parse(userData);
+        if (activeRole) {
+          parsedUser.activeRole = activeRole;
+        }
+        console.log("🔄 [SIDEBAR]: User data updated:", parsedUser);
+        setUser(parsedUser);
+      }
+    };
+
+    // Also listen for userDataUpdated event (from role-selection)
+    const handleUserDataUpdated = () => {
+      console.log("🔄 [SIDEBAR]: userDataUpdated event received");
+      handleAuthStateChanged();
+    };
+
+    window.addEventListener("authStateChanged", handleAuthStateChanged);
+    window.addEventListener("userDataUpdated", handleUserDataUpdated);
+    return () => {
+      window.removeEventListener("authStateChanged", handleAuthStateChanged);
+      window.removeEventListener("userDataUpdated", handleUserDataUpdated);
+    };
+  }, []);
+
+  const handleNewChat = () => {
+    console.log("New Chat button clicked, setting currentChatId to null");
+    onChatSelect(null);
+  };
+
+  const handleChatSelect = (chatId: string) => {
+    onChatSelect(chatId);
+  };
+
+  const handleDeleteChat = async (e: React.MouseEvent, chatMongoId: string) => {
+    e.stopPropagation(); // Prevent triggering chat select
+
+    if (!confirm("Are you sure you want to delete this chat?")) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        console.error("No token found");
+        return;
+      }
+
+      console.log("Attempting to delete chat:", chatMongoId);
+      const res = await fetch(`/api/chats/${chatMongoId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const responseData = await res.json();
+      console.log("Delete response:", res.status, responseData);
+
+      if (!res.ok) {
+        console.error("Delete failed:", responseData.error || "Unknown error");
+        throw new Error(responseData.error || "Failed to delete chat");
+      }
+
+      // Remove from sidebar
+      setChats((prev) => prev.filter((chat) => chat._id !== chatMongoId));
+
+      // If deleted chat was active, clear it
+      const deletedChat = chats.find((c) => c._id === chatMongoId);
+      if (deletedChat && currentChatId === deletedChat.chatId) {
+        onChatSelect(null);
+      }
+
+      console.log("Chat deleted successfully");
+    } catch (error) {
+      console.error("Error deleting chat:", error);
+      alert("Failed to delete chat");
+    }
+  };
+
+  return (
+    // FIX: Light mode uses gray-50 bg + dark text. Dark mode uses brand-slate bg + cream text.
+    <div className="w-64 h-full bg-gray-50 border-r border-gray-200 dark:bg-slate-900 dark:border-slate-800 text-gray-900 dark:text-gray-100 flex flex-col shadow-lg overflow-hidden transition-colors duration-300">
+      {/* Top Section - New Chat Button */}
+      <div className="shrink-0 border-b border-gray-200 dark:border-brand-slate/30 flex flex-col gap-2 p-2 transition-colors duration-300">
+        <button
+          onClick={handleNewChat}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-brand hover:shadow-brand text-white rounded-lg transition-all duration-200 font-semibold shadow-md"
+        >
+          <FiPlus className="w-4 h-4" />
+          New Chat
+        </button>
+      </div>
+
+      {/* Middle Section - Recent Chats (Scrollable Only) - Hidden for Guests */}
+      {!isGuest ? (
+        <div className="flex-1 overflow-y-auto overscroll-contain min-h-0 p-1 border-b border-gray-200 dark:border-brand-slate/30 transition-colors duration-300">
+          <p className="text-xs text-gray-500 dark:text-brand-light/70 font-semibold px-2 sm:px-3 py-2 uppercase tracking-wider">
+            Recent Chats
+          </p>
+          <div className="space-y-1">
+            {isLoading ? (
+              <p className="text-xs text-gray-400 dark:text-brand-light/50 px-2 sm:px-3 py-2">
+                Loading chats...
+              </p>
+            ) : chats.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-brand-light/50 px-2 sm:px-3 py-2">
+                No chats yet
+              </p>
+            ) : (
+              chats.map((chat) => (
+                <div
+                  key={chat._id}
+                  // FIX: Hover states and Active states adapted for light/dark
+                  className={`flex items-center gap-2 px-2 sm:px-3 py-2 rounded-lg cursor-pointer transition-all duration-200 group ${
+                    currentChatId === chat.chatId
+                      ? "bg-gray-200 dark:bg-brand-slate/80 border-l-2 border-brand-accent"
+                      : "hover:bg-gray-200 dark:hover:bg-brand-slate/50"
+                  }`}
+                >
+                  <button
+                    onClick={() => handleChatSelect(chat.chatId)}
+                    className="flex-1 flex items-center gap-2 text-left truncate min-w-0"
+                  >
+                    <FiMessageSquare
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        currentChatId === chat.chatId
+                          ? "text-brand-accent"
+                          : "text-gray-400 dark:text-brand-light/60 group-hover:text-brand-accent"
+                      }`}
+                    />
+                    <span
+                      className={`text-xs sm:text-sm truncate transition-colors ${
+                        currentChatId === chat.chatId
+                          ? "text-gray-900 dark:text-brand-cream font-medium"
+                          : "text-gray-600 dark:text-brand-cream/80 group-hover:text-gray-900 dark:group-hover:text-brand-cream"
+                      }`}
+                    >
+                      {chat.title}
+                    </span>
+                  </button>
+                  <button
+                    onClick={(e) => handleDeleteChat(e, chat._id)}
+                    className="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-500/20 text-gray-400 dark:text-brand-light/60 hover:text-red-600 dark:hover:text-red-400 transition-colors lg:opacity-0 lg:group-hover:opacity-100 opacity-100 shrink-0"
+                    title="Delete chat"
+                    aria-label="Delete chat"
+                  >
+                    <FiTrash2 className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center border-b border-gray-200 dark:border-brand-slate/30">
+          <p className="text-xs text-gray-400 dark:text-brand-light/50 text-center px-2">
+            Guest mode: No chat history
+          </p>
+        </div>
+      )}
+
+      {/* Bottom Section - Upload & Profile (Always Visible) */}
+      <div className="shrink-0 flex flex-col">
+        {/* User Profile Section - Hidden for Guests */}
+        {user && !isGuest && (
+          <div className="p-1 sm:p-2">
+            <Link
+              href="/settings"
+              className="w-full flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 sm:py-3 hover:bg-gray-200 dark:hover:bg-brand-slate/50 rounded-lg transition-all duration-200"
+            >
+              {/* Profile Picture */}
+              <div className="w-8 sm:w-10 h-8 sm:h-10 rounded-full bg-gradient-brand flex items-center justify-center shrink-0 overflow-hidden">
+                {user.profilePicture ? (
+                  <img
+                    src={user.profilePicture}
+                    alt={user.name}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-white font-semibold text-xs sm:text-sm">
+                    {user.name?.charAt(0).toUpperCase() || "?"}
+                  </span>
+                )}
+              </div>
+
+              {/* User Info */}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs sm:text-sm font-semibold text-gray-900 dark:text-brand-cream truncate">
+                  {user.name}
+                </p>
+                {/* Role Label - Priority: Admin > Student > Lecturer */}
+                {isSystemAdmin ? (
+                  <p className="text-xs font-bold tracking-wide text-sky-600 dark:text-sky-400">
+                    Admin
+                  </p>
+                ) : user.activeRole === "student" ? (
+                  <p className="text-xs font-bold tracking-wide text-emerald-600 dark:text-emerald-400">
+                    Student
+                  </p>
+                ) : user.activeRole === "lecturer" ? (
+                  <p className="text-xs font-bold tracking-wide text-sky-600 dark:text-sky-400">
+                    Lecturer
+                  </p>
+                ) : null}
+              </div>
+            </Link>
+          </div>
+        )}
+
+        {/* Guest Mode Profile Section */}
+        {isGuest && user && (
+          <div className="p-1 sm:p-2">
+            <div className="w-full flex items-center gap-2 sm:gap-3 px-2 sm:px-3 py-2 sm:py-3 rounded-lg">
+              <div className="w-8 sm:w-10 h-8 sm:h-10 rounded-full bg-gradient-brand flex items-center justify-center shrink-0 overflow-hidden">
+                <span className="text-white font-semibold text-xs sm:text-sm">
+                  G
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs sm:text-sm font-semibold text-gray-900 dark:text-brand-cream truncate">
+                  Guest User
+                </p>
+                {user.role === "user" ? (
+                  <p className="text-xs font-bold tracking-wide text-emerald-600 dark:text-emerald-400">
+                    Student
+                  </p>
+                ) : (
+                  <p className="text-xs font-bold tracking-wide text-sky-600 dark:text-sky-400">
+                    Lecturer
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
